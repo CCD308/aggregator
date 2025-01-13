@@ -30,10 +30,10 @@ jobs:
         with:
           python-version: "3.12.8"
           architecture: "x64"
-          cache: false  # 禁用缓存，避免缓存泄漏敏感信息
+        # 移除缓存选项
 
       - name: Install
-        run: pip3 install --no-cache-dir -r requirements.txt  # 确保不使用缓存安装
+        run: pip3 install --no-cache-dir -r requirements.txt  # 使用 --no-cache-dir 确保 pip 不缓存
 
       - name: Check
         run: |
