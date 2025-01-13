@@ -3,3 +3,4 @@ tqdm
 geoip2
 pycryptodomex
 fofa-hack
+Flask==3.1.0
