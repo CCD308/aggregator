@@ -1,0 +1,116 @@
+name: Get Subscription Every 6 Hours
+on:
+  schedule:
+    - cron: "0 16,22,4,10 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.repository }}
+  cancel-in-progress: true
+
+env:
+  TZ: Asia/Shanghai
+  GIST_PAT: ${{ secrets.GIST_PAT }}
+  GIST_LINK: ${{ secrets.GIST_LINK }}
+  CUSTOMIZE_LINK: ${{ secrets.CUSTOMIZE_LINK }}
+  ENABLE_SPECIAL_PROTOCOLS: ${{ vars.ENABLE_SPECIAL_PROTOCOLS }}
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Prepare
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.8"
+          architecture: "x64"
+        # 移除缓存选项
+
+      - name: Install
+        run: pip3 install --no-cache-dir -r requirements.txt  # 使用 --no-cache-dir 确保 pip 不缓存
+
+      - name: Check
+        run: |
+          if [ -z "$GIST_PAT" ]; then
+              echo "Error: environment 'GIST_PAT' cannot be empty"
+              exit 1
+          fi
+
+          if [ -z "$GIST_LINK" ]; then
+              echo "Error: environment 'GIST_LINK' cannot be empty"
+              exit 1
+          fi
+
+          LINK_PARTS=$(echo "$GIST_LINK" | awk -F'/' 'NF==2 && $1!="" && $2!=""')
+          if [ -z "$LINK_PARTS" ]; then
+              echo "Error: environment 'GIST_LINK' is not valid, should be 'username/gist_id' format"
+              exit 1
+          fi
+
+      - name: Collect
+        run: python -u subscribe/collect.py --all --overwrite --skip
+
+      - name: Timestamp
+        run: date
+
+      - name: Send success notification # 成功通知
+        if: success()
+        env:
+          WXPUSHER_APPTOKEN: ${{ secrets.WXPUSHER_APPTOKEN }}
+          WXPUSHER_UID: ${{ secrets.WXPUSHER_UID }}
+          WXPUSHER_TOPIC_ID: ${{ secrets.WXPUSHER_TOPIC_ID }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          RUN_MODE: ${{ github.event_name }}
+        run: |
+          RAW_LINK="https://gist.githubusercontent.com/$GITHUB_ACTOR/$GIST_ID/raw/clash.yaml"
+          ROOT_LINK=$(echo "$RAW_LINK" | sed -E 's#/raw/[a-zA-Z0-9]+/#/raw/#')
+          if [[ "$RUN_MODE" == "workflow_dispatch" ]]; then
+            MODE_TEXT="手动运行成功，订阅更新已完成"
+          else
+            MODE_TEXT="自动运行成功，订阅更新已完成"
+          fi
+          MESSAGE="$MODE_TEXT\n订阅链接名称：clash.yaml\n订阅链接：$ROOT_LINK"
+          if [[ -n "$WXPUSHER_UID" || -n "$WXPUSHER_TOPIC_ID" ]]; then
+            curl -X POST "https://wxpusher.zjiecode.com/api/send/message" -H "Content-Type: application/json" -d '{
+              "appToken":"'"$WXPUSHER_APPTOKEN"'",
+              "content":"'"$MESSAGE"'",
+              "contentType":1,
+              "uids":['"${WXPUSHER_UID:+\"$WXPUSHER_UID\"}"'],
+              "topicIds":['"${WXPUSHER_TOPIC_ID:+\"$WXPUSHER_TOPIC_ID\"}"']
+            }';
+          else
+            echo "未配置 UID 或 Topic ID，无法发送通知。";
+          fi
+
+      - name: Send failure notification # 失败通知
+        if: failure()
+        env:
+          WXPUSHER_APPTOKEN: ${{ secrets.WXPUSHER_APPTOKEN }}
+          WXPUSHER_UID: ${{ secrets.WXPUSHER_UID }}
+          WXPUSHER_TOPIC_ID: ${{ secrets.WXPUSHER_TOPIC_ID }}
+          RUN_MODE: ${{ github.event_name }}
+        run: |
+          if [[ "$RUN_MODE" == "workflow_dispatch" ]]; then
+            MODE_TEXT="手动运行失败，订阅更新未完成"
+          else
+            MODE_TEXT="自动运行失败，订阅更新未完成"
+          fi
+          MESSAGE="$MODE_TEXT\n请检查错误日志。"
+          if [[ -n "$WXPUSHER_UID" || -n "$WXPUSHER_TOPIC_ID" ]]; then
+            curl -X POST "https://wxpusher.zjiecode.com/api/send/message" -H "Content-Type: application/json" -d '{
+              "appToken":"'"$WXPUSHER_APPTOKEN"'",
+              "content":"'"$MESSAGE"'",
+              "contentType":1,
+              "uids":['"${WXPUSHER_UID:+\"$WXPUSHER_UID\"}"'],
+              "topicIds":['"${WXPUSHER_TOPIC_ID:+\"$WXPUSHER_TOPIC_ID\"}"']
+            }';
+          else
+            echo "未配置 UID 或 Topic ID，无法发送通知。";
+          fi
