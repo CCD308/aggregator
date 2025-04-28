@@ -1,13 +1,10 @@
-name: Get Subscription Weekly
+name: Get Subscription
 
 on:
   schedule:
-    # - cron: '50 23 * * *'
-    # - cron: '* 05 * * *'
-    # - cron: '12 11 * * *'
-    # - cron: '14 14 * * *'
-    - cron: '0 0 * * 5'
-  workflow_dispatch: # 允许手动触发
+    # Cron schedule: runs every 6 hours at 00:00, 06:00, 12:00, 18:00 UTC
+    - cron: '0 0,6,12,18 * * *'
+  workflow_dispatch:  # Allows manual triggering of the workflow
 
 permissions:
   contents: write
@@ -15,82 +12,92 @@ permissions:
 jobs:
   execute-script:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-    - name: Set up Python 3.10
-      uses: actions/setup-python@v3
-      with:
-        python-version: "3.10"
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v3
+        with:
+          python-version: "3.10"
 
-    - name: Install dependencies
-      run: |
-        pip3 install pyYAML requests
-        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-    
-    - name: Install tqdm
-      run: |
-        pip install tqdm
+      - name: Install dependencies
+        run: |
+          pip3 install pyYAML requests
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-    - name: Collect Subscribe
-      id: collect
-      run: |
-        cd subscribe
-        python -u collect.py -s
-      continue-on-error: true
+      - name: Install tqdm
+        run: |
+          pip install tqdm
 
-    - name: Output directory structure
-      run: |
-        cd ./data
-        ls -R
+      - name: Collect Subscribe
+        id: collect
+        run: |
+          cd subscribe
+          python -u collect.py -s
+        continue-on-error: true
 
-    - name: Send success notification # 成功时发送通知
-      if: success()
-      env:
-        WXPUSHER_APPTOKEN: ${{ secrets.WXPUSHER_APPTOKEN }}
-      run: |
-        curl -X POST "https://wxpusher.zjiecode.com/api/send/message" -H "Content-Type: application/json" -d '{
-          "appToken":"'"$WXPUSHER_APPTOKEN"'",
-          "content":"机场爬虫运行成功",
-          "contentType":1,
-          "topicIds":[30318],
-          "verifyPay":false, 
-          "verifyPayType":0
-        }'
-      
-    - name: Send failure notification # 失败时发送通知
-      if: failure()
-      env:
-        WXPUSHER_APPTOKEN: ${{ secrets.WXPUSHER_APPTOKEN }}
-      run: |
-        curl -X POST "https://wxpusher.zjiecode.com/api/send/message" -H "Content-Type: application/json" -d '{
-          "appToken":"'"$WXPUSHER_APPTOKEN"'",
-          "content":"机场爬虫运行失败",
-          "contentType":1,
-          "topicIds":[30318],
-          "verifyPay":false, 
-          "verifyPayType":0
-        }'
-        
-    - name: Create/Update Gist
-      env:
-        GH_TOKEN: ${{ secrets.PAT}}
-      run: |
-        cd ./data
-        gh gist edit ${{ secrets.GIST_ID }} --add "clash.yaml"
-        gh gist edit ${{ secrets.GIST_ID }} --add "subscribes.txt"
-        gh gist edit ${{ secrets.GIST_ID }} --add "domains.txt"
-        gh gist edit ${{ secrets.GIST_ID }} --add "valid-domains.txt"
+      - name: Create/Update Gist
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+        run: |
+          cd ./data  # Navigate to the data directory
+          gh gist edit ${{ secrets.GIST_ID }} --add "clash.yaml"
+          gh gist edit ${{ secrets.GIST_ID }} --add "subscribes.txt"
+          gh gist edit ${{ secrets.GIST_ID }} --add "domains.txt"
+          gh gist edit ${{ secrets.GIST_ID }} --add "valid-domains.txt"
 
-    - name: Configure git
-      run: |
-        git config --global user.email "${{ secrets.EMAIL }}" # 使用您的 GitHub 邮箱地址
-        git config --global user.name "${{ secrets.NAME }}" # 使用您的 GitHub 用户名
+      - name: Send success notification # Success notification
+        if: success()
+        env:
+          WXPUSHER_APPTOKEN: ${{ secrets.WXPUSHER_APPTOKEN }}
+          WXPUSHER_UID: ${{ secrets.WXPUSHER_UID }}
+          WXPUSHER_TOPIC_ID: ${{ secrets.WXPUSHER_TOPIC_ID }}
+          GIST_ID: ${{ secrets.GIST_ID }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          RUN_MODE: ${{ github.event_name }}
+        run: |
+          RAW_LINK="https://gist.githubusercontent.com/$GITHUB_ACTOR/$GIST_ID/raw/clash.yaml"
+          ROOT_LINK=$(echo "$RAW_LINK" | sed -E 's#/raw/[a-zA-Z0-9]+/#/raw/#')
+          if [[ "$RUN_MODE" == "workflow_dispatch" ]]; then
+            MODE_TEXT="手动运行成功，订阅更新已完成"
+          else
+            MODE_TEXT="自动运行成功，订阅更新已完成"
+          fi
+          MESSAGE="$MODE_TEXT\n订阅链接名称：clash.yaml\n订阅链接：$ROOT_LINK"
+          if [[ -n "$WXPUSHER_UID" || -n "$WXPUSHER_TOPIC_ID" ]]; then
+            curl -X POST "https://wxpusher.zjiecode.com/api/send/message" -H "Content-Type: application/json" -d '{
+              "appToken":"'"$WXPUSHER_APPTOKEN"'",
+              "content":"'"$MESSAGE"'",
+              "contentType":1,
+              "uids":['"${WXPUSHER_UID:+\"$WXPUSHER_UID\"}"'],
+              "topicIds":['"${WXPUSHER_TOPIC_ID:+\"$WXPUSHER_TOPIC_ID\"}"']
+            }';
+          else
+            echo "未配置 UID 或 Topic ID，无法发送通知。";
+          fi
 
-    - name: Commit and Push
-      run: |
-       cd ./data # 根据需要进入到文件所在目录
-       git add clash.yaml
-       git commit -m "Update clash.yaml" # 提交信息根据需要自定义
-       git push
+      - name: Send failure notification # Failure notification
+        if: failure()
+        env:
+          WXPUSHER_APPTOKEN: ${{ secrets.WXPUSHER_APPTOKEN }}
+          WXPUSHER_UID: ${{ secrets.WXPUSHER_UID }}
+          WXPUSHER_TOPIC_ID: ${{ secrets.WXPUSHER_TOPIC_ID }}
+          RUN_MODE: ${{ github.event_name }}
+        run: |
+          if [[ "$RUN_MODE" == "workflow_dispatch" ]]; then
+            MODE_TEXT="手动运行失败，订阅更新未完成"
+          else
+            MODE_TEXT="自动运行失败，订阅更新未完成"
+          fi
+          MESSAGE="$MODE_TEXT\n请检查错误日志。"
+          if [[ -n "$WXPUSHER_UID" || -n "$WXPUSHER_TOPIC_ID" ]]; then
+            curl -X POST "https://wxpusher.zjiecode.com/api/send/message" -H "Content-Type: application/json" -d '{
+              "appToken":"'"$WXPUSHER_APPTOKEN"'",
+              "content":"'"$MESSAGE"'",
+              "contentType":1,
+              "uids":['"${WXPUSHER_UID:+\"$WXPUSHER_UID\"}"'],
+              "topicIds":['"${WXPUSHER_TOPIC_ID:+\"$WXPUSHER_TOPIC_ID\"}"']
+            }';
+          else
+            echo "未配置 UID 或 Topic ID，无法发送通知。";
+          fi
